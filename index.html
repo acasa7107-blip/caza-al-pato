@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>¡Dispara al Pato! 🦆🔫</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: linear-gradient(135deg, #87CEEB 0%, #98D8E8 50%, #E0F6FF 100%);
+      overflow: hidden;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: white;
+      cursor: crosshair;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 10;
+      font-size: 1.8rem;
+      font-weight: bold;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+    #gameOver {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      padding: 3rem;
+      border-radius: 20px;
+      text-align: center;
+      display: none;
+      z-index: 20;
+    }
+    #gameOver h2 {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      background: linear-gradient(45deg, #ff6b6b, #ffd93d);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    #restart {
+      background: #22c55e;
+      color: white;
+      border: none;
+      padding: 1rem 2rem;
+      font-size: 1.5rem;
+      border-radius: 50px;
+      cursor: pointer;
+      margin-top: 1.5rem;
+      transition: all 0.3s;
+    }
+    #restart:hover {
+      background: #16a34a;
+      transform: scale(1.1);
+    }
+    @media (max-width: 600px) {
+      #ui { font-size: 1.4rem; }
+      #gameOver h2 { font-size: 2.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  
+  <div id="ui">
+    🦆 Puntos: <span id="score">0</span> | ❤️ Vidas: <span id="lives">10</span> | Nivel: <span id="level">1</span>
+  </div>
+  
+  <div id="gameOver">
+    <h2>¡Game Over! 💥</h2>
+    <p>Puntos finales: <span id="finalScore">0</span></p>
+    <button id="restart">Jugar de Nuevo 🔄</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const levelEl = document.getElementById('level');
+    const gameOverEl = document.getElementById('gameOver');
+    const finalScoreEl = document.getElementById('finalScore');
+    const restartBtn = document.getElementById('restart');
+
+    // Ajustar canvas al tamaño de la ventana
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Variables del juego
+    let score = 0;
+    let lives = 10;
+    let level = 1;
+    let ducks = [];
+    let particles = [];
+    let spawnTimer = 0;
+    let mouseX = 0;
+    let mouseY = 0;
+    let gameRunning = true;
+    let audioCtx;
+
+    // Inicializar audio
+    function initAudio() {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    // Sonido de disparo
+    function shootSound() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = 600;
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 0.1);
+    }
+
+    // Sonido de hit
+    function hitSound() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = 400;
+      gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 0.2);
+    }
+
+    // Clase Pato
+    class Duck {
+      constructor() {
+        this.reset();
+      }
+      reset() {
+        this.x = canvas.width + 50;
+        this.y = 100 + Math.random() * (canvas.height - 250);
+        this.speed = 1.5 + level * 0.5 + Math.random() * 1;
+        this.size = 55 + Math.random() * 15;
+        this.alive = true;
+        this.rotation = 0;
+      }
+      update() {
+        this.x -= this.speed;
+        this.rotation += 0.05;
+        if (this.x < -this.size) {
+          lives--;
+          this.alive = false;
+        }
+      }
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(Math.sin(this.rotation) * 0.1);
+        ctx.font = `${this.size}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🦆', 0, 0);
+        ctx.restore();
+      }
+    }
+
+    // Partículas para explosión
+    class Particle {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.vx = (Math.random() - 0.5) * 10;
+        this.vy = (Math.random() - 0.5) * 10;
+        this.life = 1;
+        this.size = Math.random() * 5 + 2;
+      }
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vy += 0.2; // gravedad
+        this.life -= 0.03;
+      }
+      draw() {
+        ctx.save();
+        ctx.globalAlpha = this.life;
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // Spawn de patos
+    function spawnDuck() {
+      ducks.push(new Duck());
+    }
+
+    // Disparo
+    canvas.addEventListener('click', (e) => {
+      if (!gameRunning) return;
+      shootSound();
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      for (let i = ducks.length - 1; i >= 0; i--) {
+        const duck = ducks[i];
+        if (duck.alive) {
+          const dist = Math.hypot(mx - duck.x, my - duck.y);
+          if (dist < duck.size / 2) {
+            duck.alive = false;
+            score += 10 + level * 5;
+            hitSound();
+            // Explosión
+            for (let j = 0; j < 15; j++) {
+              particles.push(new Particle(duck.x, duck.y));
+            }
+            break;
+          }
+        }
+      }
+    });
+
+    // Movimiento del mouse para crosshair
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      mouseX = e.clientX - rect.left;
+      mouseY = e.clientY - rect.top;
+    });
+
+    // Restart
+    restartBtn.addEventListener('click', () => {
+      score = 0;
+      lives = 10;
+      level = 1;
+      ducks = [];
+      particles = [];
+      gameRunning = true;
+      gameOverEl.style.display = 'none';
+      updateUI();
+    });
+
+    // Actualizar UI
+    function updateUI() {
+      scoreEl.textContent = score;
+      livesEl.textContent = lives;
+      levelEl.textContent = level;
+    }
+
+    // Loop principal
+    function gameLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Nubes de fondo (opcional, para ambiente)
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      for (let i = 0; i < 5; i++) {
+        const cx = (Date.now() * 0.01 + i * 1000) % (canvas.width + 200) - 100;
+        ctx.beginPath();
+        ctx.arc(cx, 80 + i * 40, 40, 0, Math.PI * 2);
+        ctx.arc(cx + 50, 80 + i * 40, 50, 0, Math.PI * 2);
+        ctx.arc(cx + 100, 80 + i * 40, 40, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (gameRunning) {
+        // Spawn timer (más rápido por nivel)
+        spawnTimer++;
+        if (spawnTimer > Math.max(60 - level * 4, 30)) {
+          spawnDuck();
+          spawnTimer = 0;
+        }
+
+        // Actualizar y dibujar patos
+        for (let i = ducks.length - 1; i >= 0; i--) {
+          const duck = ducks[i];
+          if (duck.alive) {
+            duck.update();
+            duck.draw();
+          } else {
+            ducks.splice(i, 1);
+          }
+        }
+
+        // Partículas
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.update();
+          p.draw();
+          if (p.life <= 0) {
+            particles.splice(i, 1);
+          }
+        }
+
+        // Subir nivel cada 100 puntos
+        const newLevel = Math.floor(score / 100) + 1;
+        if (newLevel > level) {
+          level = newLevel;
+        }
+
+        // Game over
+        if (lives <= 0) {
+          gameRunning = false;
+          finalScoreEl.textContent = score;
+          gameOverEl.style.display = 'block';
+        }
+
+        updateUI();
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Crosshair
+    function drawCrosshair() {
+      ctx.strokeStyle = '#ff4444';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(mouseX - 25, mouseY);
+      ctx.lineTo(mouseX + 25, mouseY);
+      ctx.moveTo(mouseX, mouseY - 25);
+      ctx.lineTo(mouseX, mouseY + 25);
+      ctx.stroke();
+
+      // Centro
+      ctx.beginPath();
+      ctx.arc(mouseX, mouseY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff4444';
+      ctx.fill();
+    }
+
+    // Iniciar
+    initAudio();
+    gameLoop();
+    setTimeout(spawnDuck, 1000); // Primer pato
+  </script>
+</body>
+</html>
